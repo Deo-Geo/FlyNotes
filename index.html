@@ -159,35 +159,44 @@
         const statusDiv = document.getElementById("status");
 
         function connect() {
-            // Determine correct address automatically
-            let wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-            let wsUrl = `${wsProtocol}//${window.location.host}`;
+            const statusDiv = document.getElementById("status");
             
-            // If running strictly locally on file system, force localhost
-            if (window.location.protocol === 'file:') {
-                 wsUrl = "https://flynotes.onrender.com";
-            }
+            // 🛑 REPLACE THIS WITH YOUR ACTUAL RENDER URL!
+            // Do not include https:// or wss://, just the domain name.
+            const RENDER_URL = "https://flynotes.onrender.com"; 
+            
+            // Force secure WebSocket connection to Render
+            const wsUrl = `wss://${RENDER_URL}`;
 
-            console.log("Connecting to:", wsUrl);
+            console.log("Connecting to backend:", wsUrl);
+            statusDiv.innerText = "Connecting to server...";
+            statusDiv.style.color = "gray";
+
             socket = new WebSocket(wsUrl);
 
             socket.onopen = () => {
                 statusDiv.innerText = "🟢 Connected";
                 statusDiv.style.color = "green";
-                // Keep connection alive for Render
-                setInterval(() => socket.send(JSON.stringify({type: 'ping'})), 30000); 
+                // Keep connection alive for Render (prevents timeout drop)
+                setInterval(() => {
+                    if (socket.readyState === WebSocket.OPEN) {
+                        socket.send(JSON.stringify({type: 'ping'}));
+                    }
+                }, 30000); 
             };
 
             socket.onclose = () => {
-                statusDiv.innerText = "🔴 Disconnected - Trying to reconnect...";
+                statusDiv.innerText = "🔴 Disconnected - Retrying...";
                 statusDiv.style.color = "red";
-                // Try to reconnect after 3 seconds
+                // Try to reconnect after 3 seconds if Render goes to sleep
                 setTimeout(connect, 3000);
             };
 
             socket.onmessage = (event) => {
                 try {
                     const data = JSON.parse(event.data);
+                    
+                    // Ignore the ping heartbeats
                     if(data.type === 'ping') return;
 
                     const log = document.getElementById("log");
@@ -196,11 +205,17 @@
                     const isMe = data.name === currentName;
                     
                     msgDiv.className = `msg ${isMe ? 'sent' : 'received'}`;
-                    msgDiv.innerHTML = `<span class="msg-info">${data.name} • ${data.time}</span><div>${data.text}</div>`;
+                    msgDiv.innerHTML = `
+                        <span class="msg-info">${data.name} • ${data.time}</span>
+                        <div>${data.text}</div>
+                    `;
                     
                     log.appendChild(msgDiv);
-                    log.scrollTop = log.scrollHeight;
-                } catch(e) {}
+                    log.scrollTop = log.scrollHeight; // Auto-scroll to bottom
+                } catch(e) {
+                    // Ignore errors from non-JSON messages
+                    console.error("Message error:", e);
+                }
             };
         }
 
