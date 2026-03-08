@@ -1,0 +1,230 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>FlyNotes | Private Chat</title>
+    <!-- Include Supabase Library -->
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    <style>
+        :root { --primary: #4a90e2; --bg: #f4f7f6; --text: #333; }
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: var(--bg); display: flex; flex-direction: column; align-items: center; height: 100vh; margin: 0; }
+        h1 { color: var(--primary); margin-top: 60px; }
+        
+        /* Top Right Auth Header */
+        #auth-header { position: absolute; top: 20px; right: 20px; display: flex; align-items: center; gap: 15px; }
+        #auth-header span { font-weight: bold; color: var(--text); }
+        .btn-outline { background: transparent; color: var(--primary); border: 2px solid var(--primary); padding: 8px 15px; border-radius: 8px; cursor: pointer; transition: 0.2s; font-weight: bold; }
+        .btn-outline:hover { background: var(--primary); color: white; }
+
+        /* Centered Auth Form (Login/Signup) */
+        #auth-container { background: white; padding: 30px; border-radius: 15px; width: 90%; max-width: 320px; display: flex; flex-direction: column; gap: 15px; box-shadow: 0 10px 30px rgba(0,0,0,0.1); margin-top: 20px; }
+        #auth-container h2 { margin: 0 0 10px 0; color: var(--primary); text-align: center; }
+        #auth-container input { padding: 12px; border: 1px solid #ddd; border-radius: 8px; outline: none; width: 100%; box-sizing: border-box; }
+        .switch-mode { text-align: center; font-size: 0.9rem; color: #666; cursor: pointer; margin-top: 10px; }
+        .switch-mode:hover { color: var(--primary); text-decoration: underline; }
+        .error-msg { color: red; font-size: 0.85rem; text-align: center; margin: 0; min-height: 18px; font-weight: bold; }
+
+        /* Chat Container (Hidden by default) */
+        #chat-container { display: none; width: 90%; max-width: 500px; background: white; border-radius: 15px; box-shadow: 0 10px 25px rgba(0,0,0,0.1); flex-direction: column; height: 70vh; overflow: hidden; margin-top: 20px; }
+        
+        /* Message Log */
+        #log { flex: 1; padding: 20px; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; }
+        .msg { padding: 10px 15px; border-radius: 10px; max-width: 80%; position: relative; animation: fadeIn 0.3s ease; }
+        .msg.received { background: #e9ecef; align-self: flex-start; }
+        .msg.sent { background: var(--primary); color: white; align-self: flex-end; }
+        .msg-info { font-size: 0.7rem; opacity: 0.7; margin-bottom: 4px; display: block; }
+        
+        /* Inputs */
+        .controls { padding: 20px; background: #fff; border-top: 1px solid #eee; display: flex; gap: 10px; }
+        input { padding: 12px; border: 1px solid #ddd; border-radius: 8px; outline: none; }
+        #nameInput { width: 80px; font-weight: bold; background: #eef5ff; color: var(--primary); border-color: var(--primary); cursor: not-allowed; }
+        #txt { flex: 1; }
+        button { padding: 12px 20px; background: var(--primary); color: white; border: none; border-radius: 8px; cursor: pointer; transition: 0.2s; font-weight: bold; }
+        button:hover { background: #357abd; }
+
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+    </style>
+</head>
+<body>
+
+    <!-- Top Right Account System -->
+    <div id="auth-header">
+        <span id="user-display" style="display: none;"></span>
+        <button id="logout-btn" class="btn-outline" style="display: none;" onclick="logOut()">Log Out</button>
+    </div>
+
+    <h1>FlyNotes</h1>
+    
+    <!-- AUTHENTICATION FORM (Shows when logged out) -->
+    <div id="auth-container">
+        <h2 id="auth-title">Sign Up</h2>
+        <p class="error-msg" id="auth-error"></p>
+        <input id="auth-name" type="text" placeholder="Username (letters/numbers)">
+        <input id="auth-pass" type="password" placeholder="Password (min. 6 chars)" onkeypress="if(event.key==='Enter') authenticate()">
+        <button onclick="authenticate()" id="submit-btn">Sign Up</button>
+        <p class="switch-mode" onclick="toggleAuthMode()" id="switch-txt">Already have an account? Log In</p>
+    </div>
+
+    <!-- CHAT BOX (Shows when logged in) -->
+    <div id="chat-container">
+        <div id="log"></div>
+        <div class="controls">
+            <input id="nameInput" disabled>
+            <input id="txt" placeholder="Type a message..." onkeypress="if(event.key==='Enter') sendMsg()">
+            <button onclick="sendMsg()">Send</button>
+        </div>
+    </div>
+
+    <script>
+        // --- SUPABASE CONFIGURATION ---
+        const SUPABASE_URL = 'https://waxyifzohqivpsimowqw.supabase.co';
+        const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndheHlpZnpvaHFpdnBzaW1vd3F3Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzI1NDM3NDIsImV4cCI6MjA4ODExOTc0Mn0.2kUxhMuPgyXyX8g--Fc_amooJeFgBd9Q0qnhZ2zewMU';
+        
+        // We use supabaseClient to avoid conflicts
+        const supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+        // --- AUTHENTICATION STATE & LOGIC ---
+        let isLoginMode = false;
+        let currentUser = null;
+
+        // Automatically hide/show UI based on login status
+        supabaseClient.auth.onAuthStateChange((event, session) => {
+            const authContainer = document.getElementById('auth-container');
+            const chatContainer = document.getElementById('chat-container');
+            const logoutBtn = document.getElementById('logout-btn');
+            const userDisplay = document.getElementById('user-display');
+            const nameInput = document.getElementById('nameInput');
+
+            if (session) {
+                // USER IS LOGGED IN
+                currentUser = session.user.user_metadata.display_name;
+                
+                authContainer.style.display = 'none';
+                chatContainer.style.display = 'flex';
+                
+                logoutBtn.style.display = 'block';
+                userDisplay.style.display = 'block';
+                userDisplay.innerText = `Logged in as: ${currentUser}`;
+                nameInput.value = currentUser;
+            } else {
+                // USER IS LOGGED OUT
+                currentUser = null;
+                
+                authContainer.style.display = 'flex';
+                chatContainer.style.display = 'none';
+                
+                logoutBtn.style.display = 'none';
+                userDisplay.style.display = 'none';
+                
+                document.getElementById('auth-error').innerText = '';
+                document.getElementById('auth-pass').value = '';
+            }
+        });
+
+        function toggleAuthMode() {
+            isLoginMode = !isLoginMode;
+            document.getElementById('auth-title').innerText = isLoginMode ? 'Log In' : 'Sign Up';
+            document.getElementById('submit-btn').innerText = isLoginMode ? 'Log In' : 'Sign Up';
+            document.getElementById('switch-txt').innerText = isLoginMode ? "Don't have an account? Sign Up" : "Already have an account? Log In";
+            document.getElementById('auth-error').innerText = '';
+        }
+
+        async function authenticate() {
+            const name = document.getElementById('auth-name').value.trim();
+            const pass = document.getElementById('auth-pass').value.trim();
+            const errorMsg = document.getElementById('auth-error');
+
+            if (!name || !pass) {
+                errorMsg.innerText = "Name and password required!";
+                return;
+            }
+            if (pass.length < 6) {
+                errorMsg.innerText = "Password must be at least 6 characters!";
+                return;
+            }
+
+            // --- FIXED EMAIL GENERATION LOGIC ---
+            // 1. Remove anything that isn't a letter or number
+            const cleanName = name.toLowerCase().replace(/[^a-z0-9]/g, '');
+            
+            // 2. Ensure we have at least something left
+            if (cleanName.length < 2) {
+                errorMsg.innerText = "Username must contain at least 2 letters/numbers.";
+                return;
+            }
+
+            // 3. Use .com instead of .local to satisfy strict validators
+            const fakeEmail = `${cleanName}@flynotes.com`;
+            
+            console.log("Attempting Auth with:", fakeEmail); // Debugging
+
+            errorMsg.style.color = 'var(--text)';
+            errorMsg.innerText = "Loading...";
+
+            if (isLoginMode) {
+                // LOG IN
+                const { data, error } = await supabaseClient.auth.signInWithPassword({ email: fakeEmail, password: pass });
+                if (error) {
+                    errorMsg.style.color = 'red';
+                    errorMsg.innerText = "Incorrect username or password.";
+                    console.error("Login Error:", error);
+                }
+            } else {
+                // SIGN UP
+                const { data, error } = await supabaseClient.auth.signUp({ 
+                    email: fakeEmail, 
+                    password: pass,
+                    options: { data: { display_name: name } }
+                });
+                
+                if (error) {
+                    errorMsg.style.color = 'red';
+                    errorMsg.innerText = error.message; 
+                    console.error("Signup Error:", error);
+                }
+            }
+        }
+
+        async function logOut() {
+            await supabaseClient.auth.signOut();
+        }
+
+        // --- WEBSOCKET CHAT LOGIC ---
+        const socket = new WebSocket("ws://localhost:3000");
+        const log = document.getElementById("log");
+
+        socket.onmessage = (event) => {
+            const data = JSON.parse(event.data);
+            const msgDiv = document.createElement("div");
+            const currentName = document.getElementById("nameInput").value;
+            const isMe = data.name === currentName;
+            
+            msgDiv.className = `msg ${isMe ? 'sent' : 'received'}`;
+            msgDiv.innerHTML = `
+                <span class="msg-info">${data.name} • ${data.time}</span>
+                <div>${data.text}</div>
+            `;
+            
+            log.appendChild(msgDiv);
+            log.scrollTop = log.scrollHeight;
+        };
+
+        function sendMsg() {
+            const input = document.getElementById("txt");
+            const name = document.getElementById("nameInput").value;
+            
+            if (input.value.trim() === "") return;
+
+            const messagePayload = {
+                name: name,
+                text: input.value,
+                time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+            };
+
+            socket.send(JSON.stringify(messagePayload));
+            input.value = "";
+        }
+    </script>
+</body>
+</html>
