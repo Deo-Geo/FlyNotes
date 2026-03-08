@@ -76,19 +76,22 @@
         </div>
     </div>
 
+    <!-- ... (Keep your existing HTML/CSS exactly the same) ... -->
+
+    <!-- ADD THIS under your h1 tag to see connection status -->
+    <div id="status" style="font-size: 12px; color: gray; margin-bottom: 10px;">Connecting...</div>
+
+    <!-- REPLACE THE ENTIRE SCRIPT TAG WITH THIS -->
     <script>
-        // --- SUPABASE CONFIGURATION ---
+        // --- 1. SUPABASE CONFIGURATION ---
         const SUPABASE_URL = 'https://waxyifzohqivpsimowqw.supabase.co';
         const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndheHlpZnpvaHFpdnBzaW1vd3F3Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzI1NDM3NDIsImV4cCI6MjA4ODExOTc0Mn0.2kUxhMuPgyXyX8g--Fc_amooJeFgBd9Q0qnhZ2zewMU';
-        
-        // We use supabaseClient to avoid conflicts
         const supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
-        // --- AUTHENTICATION STATE & LOGIC ---
+        // --- 2. AUTHENTICATION LOGIC (Kept same as before) ---
         let isLoginMode = false;
         let currentUser = null;
 
-        // Automatically hide/show UI based on login status
         supabaseClient.auth.onAuthStateChange((event, session) => {
             const authContainer = document.getElementById('auth-container');
             const chatContainer = document.getElementById('chat-container');
@@ -97,28 +100,19 @@
             const nameInput = document.getElementById('nameInput');
 
             if (session) {
-                // USER IS LOGGED IN
                 currentUser = session.user.user_metadata.display_name;
-                
                 authContainer.style.display = 'none';
                 chatContainer.style.display = 'flex';
-                
                 logoutBtn.style.display = 'block';
                 userDisplay.style.display = 'block';
                 userDisplay.innerText = `Logged in as: ${currentUser}`;
                 nameInput.value = currentUser;
             } else {
-                // USER IS LOGGED OUT
                 currentUser = null;
-                
                 authContainer.style.display = 'flex';
                 chatContainer.style.display = 'none';
-                
                 logoutBtn.style.display = 'none';
                 userDisplay.style.display = 'none';
-                
-                document.getElementById('auth-error').innerText = '';
-                document.getElementById('auth-pass').value = '';
             }
         });
 
@@ -135,54 +129,24 @@
             const pass = document.getElementById('auth-pass').value.trim();
             const errorMsg = document.getElementById('auth-error');
 
-            if (!name || !pass) {
-                errorMsg.innerText = "Name and password required!";
-                return;
-            }
-            if (pass.length < 6) {
-                errorMsg.innerText = "Password must be at least 6 characters!";
+            if (!name || pass.length < 6) {
+                errorMsg.innerText = "Invalid Name or Password (min 6 chars)";
                 return;
             }
 
-            // --- FIXED EMAIL GENERATION LOGIC ---
-            // 1. Remove anything that isn't a letter or number
-            const cleanName = name.toLowerCase().replace(/[^a-z0-9]/g, '');
-            
-            // 2. Ensure we have at least something left
-            if (cleanName.length < 2) {
-                errorMsg.innerText = "Username must contain at least 2 letters/numbers.";
-                return;
-            }
-
-            // 3. Use .com instead of .local to satisfy strict validators
-            const fakeEmail = `${cleanName}@flynotes.com`;
-            
-            console.log("Attempting Auth with:", fakeEmail); // Debugging
-
-            errorMsg.style.color = 'var(--text)';
+            const fakeEmail = `${name.toLowerCase().replace(/[^a-z0-9]/g, '')}@flynotes.com`;
             errorMsg.innerText = "Loading...";
 
             if (isLoginMode) {
-                // LOG IN
-                const { data, error } = await supabaseClient.auth.signInWithPassword({ email: fakeEmail, password: pass });
-                if (error) {
-                    errorMsg.style.color = 'red';
-                    errorMsg.innerText = "Incorrect username or password.";
-                    console.error("Login Error:", error);
-                }
+                const { error } = await supabaseClient.auth.signInWithPassword({ email: fakeEmail, password: pass });
+                if (error) errorMsg.innerText = "Incorrect login.";
             } else {
-                // SIGN UP
-                const { data, error } = await supabaseClient.auth.signUp({ 
+                const { error } = await supabaseClient.auth.signUp({ 
                     email: fakeEmail, 
                     password: pass,
                     options: { data: { display_name: name } }
                 });
-                
-                if (error) {
-                    errorMsg.style.color = 'red';
-                    errorMsg.innerText = error.message; 
-                    console.error("Signup Error:", error);
-                }
+                if (error) errorMsg.innerText = error.message;
             }
         }
 
@@ -190,30 +154,62 @@
             await supabaseClient.auth.signOut();
         }
 
-        // --- WEBSOCKET CHAT LOGIC ---
-        const socket = new WebSocket("ws://localhost:3000");
-        const log = document.getElementById("log");
+        // --- 3. INTELLIGENT WEBSOCKET CONNECTION ---
+        let socket;
+        const statusDiv = document.getElementById("status");
 
-        socket.onmessage = (event) => {
-            const data = JSON.parse(event.data);
-            const msgDiv = document.createElement("div");
-            const currentName = document.getElementById("nameInput").value;
-            const isMe = data.name === currentName;
+        function connect() {
+            // Determine correct address automatically
+            let wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            let wsUrl = `${wsProtocol}//${window.location.host}`;
             
-            msgDiv.className = `msg ${isMe ? 'sent' : 'received'}`;
-            msgDiv.innerHTML = `
-                <span class="msg-info">${data.name} • ${data.time}</span>
-                <div>${data.text}</div>
-            `;
-            
-            log.appendChild(msgDiv);
-            log.scrollTop = log.scrollHeight;
-        };
+            // If running strictly locally on file system, force localhost
+            if (window.location.protocol === 'file:') {
+                 wsUrl = "https://flynotes.onrender.com";
+            }
+
+            console.log("Connecting to:", wsUrl);
+            socket = new WebSocket(wsUrl);
+
+            socket.onopen = () => {
+                statusDiv.innerText = "🟢 Connected";
+                statusDiv.style.color = "green";
+                // Keep connection alive for Render
+                setInterval(() => socket.send(JSON.stringify({type: 'ping'})), 30000); 
+            };
+
+            socket.onclose = () => {
+                statusDiv.innerText = "🔴 Disconnected - Trying to reconnect...";
+                statusDiv.style.color = "red";
+                // Try to reconnect after 3 seconds
+                setTimeout(connect, 3000);
+            };
+
+            socket.onmessage = (event) => {
+                try {
+                    const data = JSON.parse(event.data);
+                    if(data.type === 'ping') return;
+
+                    const log = document.getElementById("log");
+                    const msgDiv = document.createElement("div");
+                    const currentName = document.getElementById("nameInput").value;
+                    const isMe = data.name === currentName;
+                    
+                    msgDiv.className = `msg ${isMe ? 'sent' : 'received'}`;
+                    msgDiv.innerHTML = `<span class="msg-info">${data.name} • ${data.time}</span><div>${data.text}</div>`;
+                    
+                    log.appendChild(msgDiv);
+                    log.scrollTop = log.scrollHeight;
+                } catch(e) {}
+            };
+        }
+
+        // Start connection
+        connect();
 
         function sendMsg() {
             const input = document.getElementById("txt");
             const name = document.getElementById("nameInput").value;
-            
             if (input.value.trim() === "") return;
 
             const messagePayload = {
@@ -222,8 +218,12 @@
                 time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
             };
 
-            socket.send(JSON.stringify(messagePayload));
-            input.value = "";
+            if(socket.readyState === WebSocket.OPEN) {
+                socket.send(JSON.stringify(messagePayload));
+                input.value = "";
+            } else {
+                alert("Not connected to server!");
+            }
         }
     </script>
 </body>
