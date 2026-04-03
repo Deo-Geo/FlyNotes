@@ -26,38 +26,45 @@ async function sendToDiscord(username, text) {
 }
 // -------------------------------------------------
 
-server.on("connection", (socket) => {
-    console.log("A user joined the chat");
-
-    socket.on("message", (message) => {
+socket.on("message", (message) => {
         // Convert Buffer to string
         const dataString = message.toString();
-        console.log("Relaying:", dataString);
+        
+        let isPing = false; // We will use this to track if it's a ping
 
-        // --- NEW: Prepare data for Discord ---
-        let discordUser = "FlyNotes User"; // Default name
-        let discordMessage = dataString;   // Default message
+        // --- Prepare data for Discord ---
+        let discordUser = "FlyNotes User"; 
+        let discordMessage = dataString;   
 
         try {
-            // We try to see if the message is JSON (e.g., {"username": "Bob", "message": "Hi"})
             const parsedData = JSON.parse(dataString);
-            discordUser = parsedData.username || parsedData.name || discordUser;
-            discordMessage = parsedData.message || parsedData.text || dataString;
+            
+            // CHECK IF IT IS A PING
+            if (parsedData.type === "ping") {
+                isPing = true; // Mark it as a ping
+            } else {
+                discordUser = parsedData.username || parsedData.name || discordUser;
+                discordMessage = parsedData.message || parsedData.text || dataString;
+            }
         } catch (e) {
-            // If it's not JSON (just plain text), it skips to here and uses the defaults
+            // Not JSON, just normal text
         }
 
-        // Send to Discord
-        sendToDiscord(discordUser, discordMessage);
-        // --------------------------------------
+        // --- Send to Discord ONLY if it is NOT a ping ---
+        if (!isPing) {
+            console.log("Relaying:", dataString);
+            sendToDiscord(discordUser, discordMessage);
+        }
 
-        // Broadcast to all connected clients
-        server.clients.forEach((client) => {
-            if (client.readyState === WebSocket.OPEN) {
-                // We send the exact JSON string back to everyone
-                client.send(dataString);
-            }
-        });
+        // --- Broadcast to all connected clients ---
+        // (We also skip broadcasting pings to other users so their chats don't glitch)
+        if (!isPing) {
+            server.clients.forEach((client) => {
+                if (client.readyState === WebSocket.OPEN) {
+                    client.send(dataString);
+                }
+            });
+        }
     });
 
     socket.on("close", () => console.log("A user left"));
